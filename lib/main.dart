@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_spinkit/flutter_spinkit.dart';
-import 'package:nixieappflutter/constants/chatmessages.dart';
+import 'package:nixieappflutter/models/chatmodel.dart';
+import 'package:nixieappflutter/provider/model_provider.dart';
 import 'package:nixieappflutter/services/aimodelscreen.dart';
 import 'package:nixieappflutter/services/api.dart';
 import 'package:nixieappflutter/widgets/chat_widget.dart';
+import 'package:nixieappflutter/widgets/text_widget.dart';
+import 'package:provider/provider.dart';
 
 void main() {
   runApp(const MyApp());
@@ -15,13 +18,20 @@ class MyApp extends StatelessWidget {
   // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(
+          create: (_) => ModelsProvider(),
+        ),
+      ],
+      child: MaterialApp(
+        title: 'Flutter Demo',
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+          useMaterial3: true,
+        ),
+        home: const MyHomePage(),
       ),
-      home: const MyHomePage(),
     );
   }
 }
@@ -34,21 +44,31 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  final bool _isTyping = true;
+  bool _isTyping = false;
+  late ScrollController _listScrollController;
+  late FocusNode focusNode;
   late TextEditingController textEditingController;
   @override
   void initState() {
     textEditingController = TextEditingController();
+    _listScrollController = ScrollController();
+    focusNode = FocusNode();
     super.initState();
   }
 
   @override
   void dispose() {
     textEditingController.dispose();
+    focusNode.dispose();
+    _listScrollController.dispose();
     super.dispose();
   }
 
+  List<ChatModel> chatList = [];
+
+  @override
   Widget build(BuildContext context) {
+    final modelsProvider = Provider.of<ModelsProvider>(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -71,13 +91,12 @@ class _MyHomePageState extends State<MyHomePage> {
           children: [
             Flexible(
               child: ListView.builder(
-                itemCount: 6,
+                controller: _listScrollController,
+                itemCount: chatList.length,
                 itemBuilder: (context, index) {
                   return ChatWidget(
-                    msg: chatMessages[index]["msg"].toString(),
-                    chatIndex: int.parse(
-                      chatMessages[index]["chatIndex"].toString(),
-                    ),
+                    msg: chatList[index].msg,
+                    chatIndex: chatList[index].chatIndex,
                   );
                 },
               ),
@@ -94,8 +113,11 @@ class _MyHomePageState extends State<MyHomePage> {
                 children: [
                   Expanded(
                     child: TextField(
+                      focusNode: focusNode,
                       controller: textEditingController,
-                      onSubmitted: (value) {},
+                      onSubmitted: (value) async {
+                        await sendMessageFCT(modelsProvider: modelsProvider);
+                      },
                       decoration: InputDecoration(
                         hintText: 'Ask me anything',
                         border: OutlineInputBorder(
@@ -103,11 +125,8 @@ class _MyHomePageState extends State<MyHomePage> {
                         ),
                         suffixIcon: IconButton(
                           onPressed: () async {
-                            try {
-                              await Api.getModels();
-                            } catch (e) {
-                              print(e);
-                            }
+                            await sendMessageFCT(
+                                modelsProvider: modelsProvider);
                           },
                           icon: const Icon(
                             Icons.send,
@@ -124,5 +143,50 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
       ),
     );
+  }
+
+  void scrollListToEnd() {
+    _listScrollController.animateTo(
+        _listScrollController.position.maxScrollExtent,
+        duration: Duration(milliseconds: 50),
+        curve: Curves.easeOut);
+  }
+
+  Future<void> sendMessageFCT({required ModelsProvider modelsProvider}) async {
+    if (textEditingController.text.isEmpty) {
+      return;
+    }
+    if (_isTyping) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: TextWidget(
+            label: "You can't send multiple messages at the same time",
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    try {
+      String msg = textEditingController.text;
+      setState(() {
+        _isTyping = true;
+        chatList.add(ChatModel(msg: msg, chatIndex: 0));
+        textEditingController.clear();
+        focusNode.unfocus();
+      });
+      chatList.addAll(
+        await Api.sendMessage(
+            message: msg, modelId: modelsProvider.getCurrentModel),
+      );
+      setState(() {});
+    } catch (e) {
+      print(e);
+    } finally {
+      setState(() {
+        scrollListToEnd();
+        _isTyping = false;
+      });
+    }
   }
 }
